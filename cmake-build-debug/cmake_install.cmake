@@ -1,4 +1,4 @@
-# Install script for directory: C:/Users/makss/Desktop/SO/projekt
+# Install script for directory: C:/Users/makss/Desktop/SO/Projekt_Pizzera
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -45,5 +45,5 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
-file(WRITE "C:/Users/makss/Desktop/SO/projekt/cmake-build-debug/${CMAKE_INSTALL_MANIFEST}"
+file(WRITE "C:/Users/makss/Desktop/SO/Projekt_Pizzera/cmake-build-debug/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
