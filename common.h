@@ -22,4 +22,22 @@
 #define LICZBA_GRUP 5  // tymczasowo, do testow
 #define NAZWA_KOLEJKI "/tmp/pizzeria_queue"
 
+//Rodzaje komunikatow
+#define MSG_TYPE_REQUEST  1
+#define MSG_TYPE_RESPONSE 2
+
+// Struktura (klient -> kasjer)
+typedef struct {
+    long mtype;
+    int groupSize;
+    pid_t senderPid;  // PID klienta
+} MsgRequest;
+
+// Struktura (kasjer -> klient)
+typedef struct {
+    long mtype;
+    int accepted;     //1=przydzielony stolik, 0=odmowa
+    int tableId;
+} MsgResponse;
+
 #endif //PROJEKT_COMMON_H
