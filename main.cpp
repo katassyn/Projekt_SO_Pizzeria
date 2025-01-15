@@ -39,7 +39,7 @@ int main()
         exit(EXIT_FAILURE);
     }
     if (strazakPid == 0) {
-        run_strazak();
+        run_strazak(kasjerPid);
         exit(0);
     }
 
