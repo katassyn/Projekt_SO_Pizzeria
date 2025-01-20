@@ -5,7 +5,7 @@ void run_strazak(pid_t kasjerPid)
 {
     printf("[STRAŻAK] Start procesu strazaka (PID=%d)\n", getpid());
 
-    sleep(3);
+    sleep(5);
     printf("[STRAŻAK] Wysylam sygnal pozaru do kasjera (PID=%d)\n", kasjerPid);
     kill(kasjerPid, SIGUSR1);
 
