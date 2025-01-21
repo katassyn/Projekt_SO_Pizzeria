@@ -130,9 +130,9 @@ void run_klient(int idGrupy)
             g_statsC->totalCustomersAtTable=0; //w razie bledow
         }
         //aktualiacja statystyki
-        g_statsC->totalCustomersServed += randomSize;
-        g_statsC->totalGroupsServed++;
-        g_statsC->groupsBySize[randomSize-1]++;
+//        g_statsC->totalCustomersServed += randomSize;
+//        g_statsC->totalGroupsServed++;
+//        g_statsC->groupsBySize[randomSize-1]++;
         unlockMutex();
     }
 

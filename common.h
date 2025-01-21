@@ -19,7 +19,7 @@
 #include <signal.h>
 #include <sys/shm.h>
 #define NAZWA_KOLEJKI "/tmp/pizzeria_queue"
-#define MAX_CLIENTS 10000
+#define MAX_CLIENTS 100000
 // Kody dla kolorów
 #define RESET   "\033[0m"
 #define GREEN   "\033[32m"
