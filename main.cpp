@@ -7,6 +7,7 @@ int g_shmId = -1;
 int g_semId = -1;
 // pozarowa
 volatile sig_atomic_t globalEmergency = 0;
+bool stopSpawning = false;
 //flaga do kasjera
 bool kasjerIsDying = false;
 // Struktura do inicjalizacji semafora
@@ -205,7 +206,7 @@ int main(int argc, char** argv)
             }
 
             //Kasjer dziala i nie ma czyszczenia
-            if(!cleaning && !kasjerIsDying) {
+            if(!cleaning && !kasjerIsDying && !stopSpawning) {
                 double r = (rand()/(double)RAND_MAX);
                 if(r < pClient) {
                     pid_t klientPid = fork();
@@ -271,7 +272,8 @@ int main(int argc, char** argv)
         //usleep(100000);
         sleep(1);
     }
-
+    stopSpawning = true;
+    //sleep(2);//dajemy czas
     printf("[MAIN] Koncze tworzenie procesow. Utworzono klientow=%d, strazakow=%d.\n",
            totalClientow, totalStrazakow);
 

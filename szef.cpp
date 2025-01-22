@@ -40,7 +40,7 @@ static void unlockMutex()
 
 void handlerPozar(int sig) {
     printf("[SZEF] Otrzymalem sygnal pozaru!\n");
-    flagaPozar = 1;
+
     globalEmergency = 1;
 
     // Ewakuacja klientow w lokalu
@@ -81,6 +81,7 @@ void handlerPozar(int sig) {
     }
 
     printf("[SZEF] Wszyscy klienci opuscili lokal i kolejke.\n");
+    flagaPozar = 1;
 }
 
 //Init stolikow
