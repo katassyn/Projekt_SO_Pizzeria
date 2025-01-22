@@ -63,7 +63,10 @@ void run_klient(int idGrupy)
     int accepted = 0;
 
     while(!accepted && !globalEmergency) {
-        if(!isEvacuation) {
+        if(isEvacuation) {
+            _exit(0);
+        }
+
             MsgRequest req;
             req.mtype = MSG_TYPE_REQUEST;
             req.groupSize = randomSize;
@@ -78,14 +81,30 @@ void run_klient(int idGrupy)
             printf("[KLIENT %d] Wyslalem zapytanie o stolik (groupSize=%d).\n",
                    idGrupy, req.groupSize);
 
+            if(isEvacuation || globalEmergency) {
+                _exit(0);
+            }
             // Odbieramy odpowiedz
             MsgResponse resp;
-            if (msgrcv(msqid, &resp, sizeof(resp) - sizeof(long),
-                       MSG_TYPE_RESPONSE, 0) < 0) {
-                if(errno != EINTR) {
-                    perror("[KLIENT] msgrcv");
+            ssize_t r = msgrcv(msqid, &resp, sizeof(resp) - sizeof(long),
+                           MSG_TYPE_RESPONSE, 0);
+            if(r < 0) {
+                if(errno == EINTR) {
+                    // Przerwano przez sygnal
+                    if(isEvacuation || globalEmergency) {
+                        _exit(0);
+                    }
+                    continue;
                 }
-                _exit(1);
+                else if(errno == EIDRM) {
+                    // Kolejka usunieta
+                    fprintf(stderr, "[KLIENT %d] msgrcv: queue removed, koncze.\n", idGrupy);
+                    _exit(0);
+                }
+                else {
+                    perror("[KLIENT] msgrcv");
+                    _exit(1);
+                }
             }
 
             if (resp.accepted == 1) {
@@ -95,7 +114,7 @@ void run_klient(int idGrupy)
                        idGrupy, tableId);
             } else {
                 //sprawdzanie ewakuacji by nie czekac na darmo
-                if(globalEmergency) {
+                if(globalEmergency || isEvacuation) {
                     printf("[KLIENT %d] Przerywam czekanie z powodu ewakuacji.\n",
                            idGrupy);
                     _exit(0);
@@ -103,11 +122,11 @@ void run_klient(int idGrupy)
                 printf("[KLIENT %d] Odmowa. Czekam i probuje ponownie.\n", idGrupy);
                 sleep(2);
             }
-        }
+
     }
 
     //jesli ewakuacja to konczymy
-    if(globalEmergency) {
+    if(globalEmergency || isEvacuation) {
         printf("[KLIENT %d] Przerywam z powodu ewakuacji.\n", idGrupy);
         _exit(0);
     }

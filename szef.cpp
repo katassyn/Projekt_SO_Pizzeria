@@ -45,9 +45,14 @@ void handlerPozar(int sig) {
 
     // Ewakuacja klientow w lokalu
     printf("[SZEF] Ewakuacja klientow w lokalu (%d)...\n", clientCount);
-    for(int i=0; i<clientCount; i++){
-        if(clientPids[i] > 0){
+    for(int i = 0; i < clientCount; i++){
+        if (clientPids[i] > 0) {
             kill(clientPids[i], SIGUSR2);
+        }
+    }
+    //czekamy na zamknecie wszystkich
+    for(int i = 0; i < clientCount; i++){
+        if (clientPids[i] > 0) {
             waitpid(clientPids[i], nullptr, 0);
             clientPids[i] = 0;
         }
@@ -56,9 +61,13 @@ void handlerPozar(int sig) {
 
     // Ewakuacja klientow w kolejce
     printf("[SZEF] Ewakuacja klientow w kolejce (%d)...\n", waitingClientCount);
-    for(int i=0; i<waitingClientCount; i++){
-        if(waitingClientPids[i] > 0){
+    for(int i = 0; i < waitingClientCount; i++){
+        if (waitingClientPids[i] > 0) {
             kill(waitingClientPids[i], SIGUSR2);
+        }
+    }
+    for(int i = 0; i < waitingClientCount; i++){
+        if (waitingClientPids[i] > 0) {
             waitpid(waitingClientPids[i], nullptr, 0);
             waitingClientPids[i] = 0;
         }
