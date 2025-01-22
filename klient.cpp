@@ -72,40 +72,47 @@ void run_klient(int idGrupy)
             req.groupSize = randomSize;
             req.senderPid = getpid();
 
-            if (msgsnd(msqid, &req, sizeof(req) - sizeof(long), 0) < 0) {
-                if(errno != EINTR) {
-                    perror("[KLIENT] msgsnd");
-                }
-                _exit(1);
+        if (msgsnd(msqid, &req, sizeof(req) - sizeof(long), 0) < 0) {
+            if(errno == EINTR) {
+                // Przerwano przez sygnal
+                continue;
             }
-            printf("[KLIENT %d] Wyslalem zapytanie o stolik (groupSize=%d).\n",
-                   idGrupy, req.groupSize);
-
-            if(isEvacuation || globalEmergency) {
+            else if(errno == EIDRM) {
+                // Kolejka usunieta
+                printf("[KLIENT %d] Kolejka usunieta, koncze.\n", idGrupy);
                 _exit(0);
             }
-            // Odbieramy odpowiedz
-            MsgResponse resp;
-            ssize_t r = msgrcv(msqid, &resp, sizeof(resp) - sizeof(long),
+            perror("[KLIENT] msgsnd");
+            _exit(1);
+        }
+
+        printf("[KLIENT %d] Wyslalem zapytanie o stolik (groupSize=%d).\n",
+               idGrupy, req.groupSize);
+
+        if(isEvacuation || globalEmergency) {
+            _exit(0);
+        }
+
+        MsgResponse resp;
+        ssize_t r = msgrcv(msqid, &resp, sizeof(resp) - sizeof(long),
                            MSG_TYPE_RESPONSE, 0);
-            if(r < 0) {
-                if(errno == EINTR) {
-                    // Przerwano przez sygnal
-                    if(isEvacuation || globalEmergency) {
-                        _exit(0);
-                    }
-                    continue;
-                }
-                else if(errno == EIDRM) {
-                    // Kolejka usunieta
-                    fprintf(stderr, "[KLIENT %d] msgrcv: queue removed, koncze.\n", idGrupy);
+
+        if(r < 0) {
+            if(errno == EINTR) {
+                // Przerwano przez sygnal
+                if(isEvacuation || globalEmergency) {
                     _exit(0);
                 }
-                else {
-                    perror("[KLIENT] msgrcv");
-                    _exit(1);
-                }
+                continue;
             }
+            else if(errno == EIDRM) {
+                // Kolejka usunieta
+                printf("[KLIENT %d] Kolejka usunieta, koncze.\n", idGrupy);
+                _exit(0);
+            }
+            perror("[KLIENT] msgrcv");
+            _exit(1);
+        }
 
             if (resp.accepted == 1) {
                 accepted = 1;
