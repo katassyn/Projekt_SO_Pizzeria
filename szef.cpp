@@ -5,7 +5,7 @@ static volatile sig_atomic_t flagaPozar = 0;
 static int msqid = -1;
 static Table tables[50];  // max stolikow
 static int tableCount = 0;//ile w uzyciu
-
+static ClientQueue waitingQueue;
 extern int g_shmId;
 extern int g_semId;
 
@@ -16,6 +16,12 @@ static pid_t clientPids[MAX_CLIENTS];
 static int clientCount = 0;
 static pid_t waitingClientPids[MAX_CLIENTS];
 static int waitingClientCount = 0;
+static void initQueue() {
+    waitingQueue.front = 0;
+    waitingQueue.rear = -1;
+    waitingQueue.size = 0;
+}
+
 static void lockMutex()
 {
     struct sembuf op;
@@ -79,7 +85,7 @@ void handlerPozar(int sig) {
         tables[i].occupied = 0;
         tables[i].groupSize = 0;
     }
-
+    //initQueue();
     printf("[SZEF] Wszyscy klienci opuscili lokal i kolejke.\n");
     flagaPozar = 1;
 }
@@ -283,6 +289,45 @@ void printSessionStats() {
     printf("%s=============================\n%s", MAGENTA, RESET);
 }
 
+static void addQueue(pid_t pid, int groupSize) {
+    if (waitingQueue.size >= MAX_CLIENTS) {
+        printf("[SZEF] Kolejka jest pelna!\n");
+        return;
+    }
+
+    waitingQueue.rear = (waitingQueue.rear + 1) % MAX_CLIENTS;
+    waitingQueue.entries[waitingQueue.rear].pid = pid;
+    waitingQueue.entries[waitingQueue.rear].groupSize = groupSize;
+    waitingQueue.size++;
+
+    printf("[SZEF] Dodano do kolejki PID=%d (pozycja=%d)\n", pid, waitingQueue.size);
+}
+
+static QueueEntry delQueue() {
+    QueueEntry entry = {0, 0};
+    if (waitingQueue.size <= 0) {
+        return entry;
+    }
+
+    entry = waitingQueue.entries[waitingQueue.front];
+    waitingQueue.front = (waitingQueue.front + 1) % MAX_CLIENTS;
+    waitingQueue.size--;
+
+    return entry;
+}
+
+static bool isNextInQueue(pid_t pid) {
+    if (waitingQueue.size <= 0) return false;
+    return waitingQueue.entries[waitingQueue.front].pid == pid;
+}
+static bool isInQueue(pid_t pid) {
+    for(int i = 0; i < waitingQueue.size; i++) {
+        if(waitingQueue.entries[waitingQueue.front + i].pid == pid) {
+            return true;
+        }
+    }
+    return false;
+}
 void run_szef()
 {
     // Dolacz do pamieci
@@ -314,7 +359,7 @@ void run_szef()
     printf("[SZEF] Utworzylem kolejke o msqid=%d\n", msqid);
     printSessionStats();
     init_tables();
-
+    initQueue();
     // Pentla glowna
     while(!flagaPozar) {
         // Odbieranie MSG_TYPE_REQUEST
@@ -325,38 +370,68 @@ void run_szef()
             printf("[SZEF] Otrzymalem zapytanie od PID=%d (groupSize=%d)\n",
                    req.senderPid, req.groupSize);
 
-            int tid = find_table(req.groupSize);
-
             MsgResponse resp;
             resp.mtype = MSG_TYPE_RESPONSE;
-
-            if(tid<0){
-                resp.accepted = 0;
-                resp.tableId  = -1;
-                printf("[SZEF] Brak miejsca dla groupSize=%d\n", req.groupSize);
-                addWaitingClientPid(req.senderPid);
+            //sprawdzamy czy kolejak istanieje
+            if(waitingQueue.size > 0) {
+                if(isNextInQueue(req.senderPid)) { //czy dany klient jest w niej pueerwszy
+                    int tid = find_table(req.groupSize);
+                    if(tid >= 0) {
+                        resp.accepted = 1;
+                        resp.tableId = tid;
+                        printf("[SZEF] Przydzielam stolik ID=%d dla groupSize=%d\n",tid, req.groupSize);
+                        delQueue();
+                        removeWaitingClientPid(req.senderPid);
+                        addClientPid(req.senderPid);
+                        if(g_stats) {
+                            lockMutex();
+                            g_stats->totalCustomersAtTable += req.groupSize;
+                            unlockMutex();
+                        }
+                    } else {
+                        resp.accepted = 0;
+                        resp.tableId = -1;
+                        printf("[SZEF] Brak miejsca dla groupSize=%d\n", req.groupSize);
+                    }
+                } else {
+                    if(!isInQueue(req.senderPid)) {
+                        addQueue(req.senderPid, req.groupSize);
+                        addWaitingClientPid(req.senderPid);
+                        printf("[SZEF] Dodano klienta %d do kolejki, pozycja %d\n",
+                               req.senderPid, waitingQueue.size);
+                    }
+                    resp.accepted = 0;
+                    resp.tableId = -1;
+                }
             } else {
-                resp.accepted = 1;
-                resp.tableId  = tid;
-                printf("[SZEF] Przydzielam stolik ID=%d dla groupSize=%d\n", tid, req.groupSize);
-                removeWaitingClientPid(req.senderPid);
-                addClientPid(req.senderPid);
-
-                //Zwiekszamy liczbe klientow
-                if(g_stats){
-                    lockMutex();
-                    g_stats->totalCustomersAtTable += req.groupSize;
-                    unlockMutex();
+                // Kolejka jest pusta
+                int tid = find_table(req.groupSize);
+                if(tid >= 0) {
+                    resp.accepted = 1;
+                    resp.tableId = tid;
+                    printf("[SZEF] Przydzielam stolik ID=%d dla groupSize=%d\n",tid, req.groupSize);
+                    addClientPid(req.senderPid);
+                    if(g_stats) {
+                        lockMutex();
+                        g_stats->totalCustomersAtTable += req.groupSize;
+                        unlockMutex();
+                    }
+                } else {
+                    resp.accepted = 0;
+                    resp.tableId = -1;
+                    addQueue(req.senderPid, req.groupSize);
+                    addWaitingClientPid(req.senderPid);
+                        printf("[SZEF] Brak miejsca, dodano klienta %d do kolejki\n",req.senderPid);
                 }
             }
 
-            if(msgsnd(msqid, &resp, sizeof(resp)-sizeof(long), 0)<0){ //blad wyslania wiad
+            if(msgsnd(msqid, &resp, sizeof(resp)-sizeof(long), 0)<0){
                 perror("[SZEF] msgsnd(resp)");
             } else {
                 printf("[SZEF] Wyslalem odpowiedz do PID=%d\n", req.senderPid);
             }
         }
-        else if(rcvSize<0 && errno!=ENOMSG){  //otrzymanie blednej wiad
+        else if(rcvSize<0 && errno!=ENOMSG){
             perror("[SZEF] msgrcv(MSG_TYPE_REQUEST)");
         }
 
@@ -372,7 +447,7 @@ void run_szef()
         else if(rcvSize2<0 && errno!=ENOMSG){
             perror("[SZEF] msgrcv(MSG_TYPE_LEAVE)");
         }
-        //zwalnianie pentli
+
         if(rcvSize<0 && rcvSize2<0){
             usleep(200000);
         }

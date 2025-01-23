@@ -77,4 +77,17 @@ typedef struct {
     int groupsBySize[4];
     int totalCustomersServed;
 } SharedStats;
+//kolejka fifo
+typedef struct {
+    pid_t pid;
+    int groupSize;
+} QueueEntry;
+
+typedef struct {
+    QueueEntry entries[MAX_CLIENTS];
+    int front;
+    int rear;
+    int size;
+} ClientQueue;
+
 #endif //PROJEKT_COMMON_H
