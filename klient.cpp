@@ -57,7 +57,7 @@ void run_klient(int idGrupy)
     }
 
     //(2) Wysylamy prosbe o stolik
-    srand(time(nullptr) ^ (getpid()<<16));
+    srand(time(nullptr));
     int randomSize = (rand() % 3) + 1; // 1-3os grupa
     int tableId = -1;
     int accepted = 0;
@@ -96,7 +96,6 @@ void run_klient(int idGrupy)
         MsgResponse resp;
         ssize_t r = msgrcv(msqid, &resp, sizeof(resp) - sizeof(long),
                            MSG_TYPE_RESPONSE, 0);
-
         if(r < 0) {
             if(errno == EINTR) {
                 // Przerwano przez sygnal

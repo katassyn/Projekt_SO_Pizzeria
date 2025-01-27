@@ -207,6 +207,11 @@ int main(int argc, char** argv)
 
             //Kasjer dziala i nie ma czyszczenia
             if(!cleaning && !kasjerIsDying && !stopSpawning) {
+                pid_t pid;
+                int status;
+                while((pid = waitpid(-1,&status,WNOHANG))>0){
+                    printf("[MAIN] Proces %d zakonczony\n", pid);
+                };
                 double r = (rand()/(double)RAND_MAX);
                 if(r < pClient) {
                     pid_t klientPid = fork();
@@ -269,8 +274,8 @@ int main(int argc, char** argv)
             }
             continue;
         }
-        //usleep(100000);
-        sleep(1);
+        usleep(100000);
+        //sleep(1);
     }
     stopSpawning = true;
     //sleep(2);//dajemy czas

@@ -10,4 +10,5 @@ void run_strazak(pid_t kasjerPid)
     kill(kasjerPid, SIGUSR1);
 
     printf("[STRAŻAK] Koncze.\n");
+    exit(0);
 }
