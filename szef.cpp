@@ -20,73 +20,52 @@ static void initQueue() {
     waitingQueue.front = 0;
     waitingQueue.rear = -1;
     waitingQueue.size = 0;
+    waitingQueue.isShuttingDown = 0;
 }
-
 static void lockMutex()
 {
-    struct sembuf op;
-    op.sem_num = MUTEX;
-    op.sem_op  = -1;//  (zablokowanie)
-    op.sem_flg = 0;
-    if(semop(g_semId, &op, 1) < 0){
-        perror("[SZEF] semop -1");
-    }
+    lockSemaphore(g_semId, MUTEX);
 }
 
 static void unlockMutex()
 {
-    struct sembuf op;
-    op.sem_num = MUTEX;
-    op.sem_op  = +1; // (oblokowanie)
-    op.sem_flg = 0;
-    if(semop(g_semId, &op, 1) < 0){
-        perror("[SZEF] semop +1");
+    unlockSemaphore(g_semId, MUTEX);
+}
+//lepsza obsluga zamykania
+static void handleShutdown() {
+    lockSemaphore(g_semId, SHUTDOWN_MUTEX);
+
+    //flaga zamykania
+    waitingQueue.isShuttingDown = 1;
+
+    //powiadamianie klientow
+    for(int i = 0; i < waitingClientCount; i++) {
+        if(waitingClientPids[i] > 0) {
+            kill(waitingClientPids[i], SIGUSR2);
+            usleep(1000);
+        }
     }
+
+    for(int i = 0; i < clientCount; i++) {
+        if(clientPids[i] > 0) {
+            kill(clientPids[i], SIGUSR2);
+            usleep(1000);
+        }
+    }
+    //czyscimy
+    for(int i = 0; i < clientCount; i++) {
+        if(clientPids[i] > 0) {
+            waitpid(clientPids[i], NULL, 0);
+        }
+    }
+
+    unlockSemaphore(g_semId, SHUTDOWN_MUTEX);
 }
 
 void handlerPozar(int sig) {
     printf("[SZEF] Otrzymalem sygnal pozaru!\n");
-
     globalEmergency = 1;
-
-    // Ewakuacja klientow w lokalu
-    printf("[SZEF] Ewakuacja klientow w lokalu (%d)...\n", clientCount);
-    for(int i = 0; i < clientCount; i++){
-        if (clientPids[i] > 0) {
-            kill(clientPids[i], SIGUSR2);
-        }
-    }
-    //czekamy na zamknecie wszystkich
-    for(int i = 0; i < clientCount; i++){
-        if (clientPids[i] > 0) {
-            waitpid(clientPids[i], nullptr, 0);
-            clientPids[i] = 0;
-        }
-    }
-    clientCount = 0;
-
-    // Ewakuacja klientow w kolejce
-    printf("[SZEF] Ewakuacja klientow w kolejce (%d)...\n", waitingClientCount);
-    for(int i = 0; i < waitingClientCount; i++){
-        if (waitingClientPids[i] > 0) {
-            kill(waitingClientPids[i], SIGUSR2);
-        }
-    }
-    for(int i = 0; i < waitingClientCount; i++){
-        if (waitingClientPids[i] > 0) {
-            waitpid(waitingClientPids[i], nullptr, 0);
-            waitingClientPids[i] = 0;
-        }
-    }
-    waitingClientCount = 0;
-
-    // Resetuj stan stolikow
-    for(int i=0; i<tableCount; i++) {
-        tables[i].occupied = 0;
-        tables[i].groupSize = 0;
-    }
-    //initQueue();
-    printf("[SZEF] Wszyscy klienci opuscili lokal i kolejke.\n");
+    handleShutdown();
     flagaPozar = 1;
 }
 
@@ -231,8 +210,10 @@ static void free_table(int tableId, int groupSize)
 
 static void addClientPid(pid_t pid)
 {
+    lockSemaphore(g_semId, QUEUE_MUTEX);
     for(int i=0; i<clientCount; i++){
         if(clientPids[i] == pid) {
+            unlockSemaphore(g_semId, QUEUE_MUTEX);
             return;
         }
     }
@@ -242,6 +223,7 @@ static void addClientPid(pid_t pid)
     } else {
         printf("[SZEF] UWAGA: Brak miejsca w clientPids!\n");
     }
+    unlockSemaphore(g_semId, QUEUE_MUTEX);
 }
 
 static void addWaitingClientPid(pid_t pid)
@@ -277,6 +259,11 @@ static void removeWaitingClientPid(pid_t pid)
 
 void printSessionStats() {
     if(!g_stats) return;
+    FILE* file = fopen("statystykiSesji.txt", "a");
+    if(!file) {
+        perror("[SZEF] File error");
+        return;
+    }
 
     printf("\n%s=== Statystyki sesji ===%s\n", MAGENTA, RESET);
     printf("%sŁączna liczba obsłużonych klientów: %d%s\n",GREEN, g_stats->totalCustomersServed, RESET);
@@ -287,11 +274,25 @@ void printSessionStats() {
     printf("3-osobowe: %d\n", g_stats->groupsBySize[2]);
     printf("4-osobowe: %d\n", g_stats->groupsBySize[3]); // dodatek by sprawdzic czy nie ma bledow
     printf("%s=============================\n%s", MAGENTA, RESET);
+
+    fprintf(file, "\n=== Statystyki sesji ===\n");
+    fprintf(file, "Łączna liczba obsłużonych klientów: %d\n", g_stats->totalCustomersServed);
+    fprintf(file, "Łączna liczba obsłużonych grup: %d\n", g_stats->totalGroupsServed);
+    fprintf(file, "Grupy według rozmiaru:\n");
+    fprintf(file, "1-osobowe: %d\n", g_stats->groupsBySize[0]);
+    fprintf(file, "2-osobowe: %d\n", g_stats->groupsBySize[1]);
+    fprintf(file, "3-osobowe: %d\n", g_stats->groupsBySize[2]);
+    fprintf(file, "4-osobowe: %d\n", g_stats->groupsBySize[3]);
+    fprintf(file, "=============================\n");
+
+    fclose(file);
 }
 
 static void addQueue(pid_t pid, int groupSize) {
+    lockSemaphore(g_semId, QUEUE_MUTEX);
     if (waitingQueue.size >= MAX_CLIENTS) {
         printf("[SZEF] Kolejka jest pelna!\n");
+        unlockSemaphore(g_semId, QUEUE_MUTEX);
         return;
     }
 
@@ -301,11 +302,14 @@ static void addQueue(pid_t pid, int groupSize) {
     waitingQueue.size++;
 
     printf("[SZEF] Dodano do kolejki PID=%d (pozycja=%d)\n", pid, waitingQueue.size);
+    unlockSemaphore(g_semId, QUEUE_MUTEX);
 }
 
 static QueueEntry delQueue() {
+    lockSemaphore(g_semId, QUEUE_MUTEX);
     QueueEntry entry = {0, 0};
     if (waitingQueue.size <= 0) {
+        unlockSemaphore(g_semId, QUEUE_MUTEX);
         return entry;
     }
 
@@ -313,23 +317,35 @@ static QueueEntry delQueue() {
     waitingQueue.front = (waitingQueue.front + 1) % MAX_CLIENTS;
     waitingQueue.size--;
 
+    unlockSemaphore(g_semId, QUEUE_MUTEX);
     return entry;
 }
 
 static bool isNextInQueue(pid_t pid) {
-    if (waitingQueue.size <= 0) return false;
-    return waitingQueue.entries[waitingQueue.front].pid == pid;
+    lockSemaphore(g_semId, QUEUE_MUTEX);
+    if (waitingQueue.size <= 0) {
+        unlockSemaphore(g_semId, QUEUE_MUTEX);
+        return false;
+    }
+    bool result = waitingQueue.entries[waitingQueue.front].pid == pid;
+    unlockSemaphore(g_semId, QUEUE_MUTEX);
+    return result;
 }
+
 static bool isInQueue(pid_t pid) {
+    lockSemaphore(g_semId, QUEUE_MUTEX);
     for(int i = 0; i < waitingQueue.size; i++) {
         if(waitingQueue.entries[waitingQueue.front + i].pid == pid) {
+            unlockSemaphore(g_semId, QUEUE_MUTEX);
             return true;
         }
     }
+    unlockSemaphore(g_semId, QUEUE_MUTEX);
     return false;
 }
 void run_szef()
 {
+    prctl(PR_SET_NAME, "kasjer", 0, 0, 0);
     // Dolacz do pamieci
     g_stats = (SharedStats*) shmat(g_shmId, nullptr, 0);
     if(g_stats==(void*)-1){
@@ -361,6 +377,7 @@ void run_szef()
     init_tables();
     initQueue();
     // Pentla glowna
+    signal(SIGPIPE, SIG_IGN);
     while(!flagaPozar) {
         // Odbieranie MSG_TYPE_REQUEST
         MsgRequest req;
@@ -425,34 +442,56 @@ void run_szef()
                 }
             }
 
-            if(msgsnd(msqid, &resp, sizeof(resp)-sizeof(long), 0)<0){
-                perror("[SZEF] msgsnd(resp)");
-            } else {
-                printf("[SZEF] Wyslalem odpowiedz do PID=%d\n", req.senderPid);
+            //wysylamy odp
+            int retry_count = 0;
+            while(retry_count < 3) { // 3 proby zapytania
+                if(msgsnd(msqid, &resp, sizeof(resp)-sizeof(long), IPC_NOWAIT) >= 0) {
+                    printf("[SZEF] Wyslalem odpowiedz do PID=%d\n", req.senderPid);
+                    break;
+                } else {
+                    if(errno == EAGAIN) {
+                        retry_count++;
+                        usleep(10000);
+                        continue;
+                    } else if(errno == EINTR) {
+                        if(flagaPozar) break;
+                        continue;
+                    } else {
+                        perror("[SZEF] msgsnd(resp)");
+                        break;
+                    }
+                }
             }
-        }
-        else if(rcvSize<0 && errno!=ENOMSG){
-            perror("[SZEF] msgrcv(MSG_TYPE_REQUEST)");
+        } else if(rcvSize < 0) {
+            if(errno == EINTR) {
+                if(flagaPozar) break;
+                continue;
+            } else if(errno != ENOMSG) {
+                perror("[SZEF] msgrcv(MSG_TYPE_REQUEST)");
+            }
         }
 
         // Odbieranie MSG_TYPE_LEAVE
         MsgLeave leaveMsg;
         ssize_t rcvSize2 = msgrcv(msqid, &leaveMsg, sizeof(leaveMsg)-sizeof(long),
                                   MSG_TYPE_LEAVE, IPC_NOWAIT);
-        if(rcvSize2>0){
+        if(rcvSize2 > 0) {
             printf("[SZEF] Otrzymalem info o wyjsciu klienta PID=%d, stolik=%d\n",
                    leaveMsg.senderPid, leaveMsg.tableId);
             free_table(leaveMsg.tableId, leaveMsg.groupSize);
-        }
-        else if(rcvSize2<0 && errno!=ENOMSG){
-            perror("[SZEF] msgrcv(MSG_TYPE_LEAVE)");
+        } else if(rcvSize2<0) {
+            if(errno == EINTR) {
+                if(flagaPozar) break;
+                continue;
+            } else if(errno!=ENOMSG){
+                perror("[SZEF] msgrcv(MSG_TYPE_LEAVE)");
+            }
         }
 
-        if(rcvSize<0 && rcvSize2<0){
-            usleep(200000);
+        if(rcvSize < 0 && rcvSize2 < 0 && errno == ENOMSG) {
+            usleep(100000);
         }
-    }
-    printSessionStats();
+    }    printSessionStats();
 
     printf("[SZEF] Kasuje kolejke...\n");
     if(msqid>=0){

@@ -1,4 +1,3 @@
-
 #ifndef PROJEKT_COMMON_H
 #define PROJEKT_COMMON_H
 
@@ -9,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/msg.h>
+#include <pthread.h>
 #include <sys/shm.h>
 #include <sys/sem.h>
 #include <sys/wait.h>
@@ -17,9 +17,11 @@
 #include <fcntl.h>
 #include <time.h>
 #include <signal.h>
+#include <sys/prctl.h>
 #include <sys/shm.h>
 #define NAZWA_KOLEJKI "/tmp/pizzeria_queue"
 #define MAX_CLIENTS 100000
+#define MAX_PENDING_REQUESTS 100
 // Kody dla kolorów
 #define RESET   "\033[0m"
 #define GREEN   "\033[32m"
@@ -31,14 +33,18 @@
 #define MSG_TYPE_RESPONSE 2
 #define MSG_TYPE_LEAVE    3
 #define MUTEX 0
-
-
+#define QUEUE_MUTEX 1
+#define SHUTDOWN_MUTEX 2
+#define PENDING_REQUESTS_MUTEX 3
+#define TOTAL_SEMS 4
+extern pthread_mutex_t requestMutex;
 extern volatile sig_atomic_t globalEmergency;
 // Struktura (klient -> kasjer)
 typedef struct {
     long mtype;
     int groupSize;
     pid_t senderPid;  // PID klienta
+    int isShutdownMsg;
 } MsgRequest;
 
 // Struktura (kasjer -> klient) - pytanie o stolik
@@ -76,6 +82,7 @@ typedef struct {
     int totalGroupsServed;
     int groupsBySize[4];
     int totalCustomersServed;
+    int pendingRequests;
 } SharedStats;
 //kolejka fifo
 typedef struct {
@@ -88,6 +95,32 @@ typedef struct {
     int front;
     int rear;
     int size;
+    int isShuttingDown;
 } ClientQueue;
 
+static inline void lockSemaphore(int semId, int semNum) {
+    struct sembuf op;
+    op.sem_num = semNum;
+    op.sem_op = -1;
+    op.sem_flg = SEM_UNDO;
+    while (semop(semId, &op, 1) < 0) {
+        if (errno != EINTR) {
+            perror("semop lock");
+            exit(1);
+        }
+    }
+}
+
+static inline void unlockSemaphore(int semId, int semNum) {
+    struct sembuf op;
+    op.sem_num = semNum;
+    op.sem_op = 1;
+    op.sem_flg = SEM_UNDO;
+    while (semop(semId, &op, 1) < 0) {
+        if (errno != EINTR) {
+            perror("semop unlock");
+            exit(1);
+        }
+    }
+}
 #endif //PROJEKT_COMMON_H

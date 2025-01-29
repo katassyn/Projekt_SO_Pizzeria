@@ -6,6 +6,7 @@
 int g_shmId = -1;
 int g_semId = -1;
 // pozarowa
+
 volatile sig_atomic_t globalEmergency = 0;
 bool stopSpawning = false;
 //flaga do kasjera
@@ -74,24 +75,28 @@ static void createSharedMemoryAndSemaphore()
         stats->totalCustomersAtTable = 0;
         stats->totalCustomersServed = 0;
         stats->totalGroupsServed = 0;
+        stats->pendingRequests = 0;
         memset(stats->groupsBySize, 0, sizeof(stats->groupsBySize));
         shmdt(stats);
     }
     // Tworzenie semafora
-    key_t semKey = ftok(NAZWA_KOLEJKI, 321);
+    key_t semKey = ftok(NAZWA_KOLEJKI, 312);
     if(semKey==-1){
         perror("[MAIN] ftok sem");
         exit(1);
     }
-    g_semId = semget(semKey, 1, 0600 | IPC_CREAT);
+    g_semId = semget(semKey, TOTAL_SEMS, 0600 | IPC_CREAT);
     if(g_semId<0){
         perror("[MAIN] semget");
         exit(1);
     }
     union semun arg;
-    arg.val = 1; // mutex = 1
-    if(semctl(g_semId, MUTEX, SETVAL, arg)<0){
-        perror("[MAIN] semctl SETVAL");
+    for(int i = 0; i < TOTAL_SEMS; i++) {
+        arg.val = 1;
+        if(semctl(g_semId, i, SETVAL, arg)<0){
+            perror("[MAIN] semctl SETVAL");
+            exit(1);
+        }
     }
 }
 
@@ -118,6 +123,7 @@ static void removeSharedMemoryAndSemaphore()
 
 int main(int argc, char** argv)
 {
+
     //(1) Walidacja parametrow
     if(argc<2){
         fprintf(stderr, "Uzycie: %s X\n", argv[0]);
@@ -159,7 +165,6 @@ int main(int argc, char** argv)
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = handlerStop;
     sigaction(SIGINT, &sa, nullptr);
-
     createSharedMemoryAndSemaphore();
 
     printf("[MAIN] Uruchamiam symulacje Pizzerii na %d minut.\n", X);
@@ -190,7 +195,7 @@ int main(int argc, char** argv)
 
         // Sprawdzamy stan kasjera
         if(kasjerPid > 0) {
-            sleep(1);//dajemy czas na otwarcie kolejki
+            //sleep(1);//dajemy czas na otwarcie kolejki
             int status;
             pid_t w = waitpid(kasjerPid, &status, WNOHANG);
             if(w == kasjerPid || globalEmergency) {
@@ -207,21 +212,34 @@ int main(int argc, char** argv)
 
             //Kasjer dziala i nie ma czyszczenia
             if(!cleaning && !kasjerIsDying && !stopSpawning) {
-                pid_t pid;
-                int status;
-                while((pid = waitpid(-1,&status,WNOHANG))>0){
-                    printf("[MAIN] Proces %d zakonczony\n", pid);
-                };
                 double r = (rand()/(double)RAND_MAX);
                 if(r < pClient) {
-                    pid_t klientPid = fork();
-                    if(klientPid == -1) {
-                        perror("[MAIN] fork klient");
-                    } else if(klientPid == 0) {
-                        run_klient(totalClientow);
-                        _exit(0);
+                    SharedStats* stats = (SharedStats*)shmat(g_shmId, nullptr, 0);
+                    if(stats != (void*)-1){
+                        lockSemaphore(g_semId,PENDING_REQUESTS_MUTEX);
+                        if(stats->pendingRequests < MAX_PENDING_REQUESTS)
+                        {
+                            stats->pendingRequests++;
+                            unlockSemaphore(g_semId,PENDING_REQUESTS_MUTEX);
+                            pid_t klientPid = fork();
+                            if(klientPid == -1) {
+                                perror("[MAIN] fork klient");
+                                lockSemaphore(g_semId, PENDING_REQUESTS_MUTEX);
+                                stats->pendingRequests--;
+                                unlockSemaphore(g_semId, PENDING_REQUESTS_MUTEX);
+                                shmdt(stats);
+                            } else if(klientPid == 0) {
+                                shmdt(stats);
+                                run_klient(totalClientow);
+                                _exit(0);
+                            }
+                            totalClientow++;
+                        } else{
+                            unlockSemaphore(g_semId,PENDING_REQUESTS_MUTEX);
+                        }
+                        shmdt(stats);
                     }
-                    totalClientow++;
+
                 }
 
                 if(!fireAlreadyCalled) {
@@ -248,18 +266,26 @@ int main(int argc, char** argv)
             if(cleanElapsed >= 5.0) {
                 cleaning = false;
                 globalEmergency = 0;
+                fireAlreadyCalled = false;
+                kasjerIsDying = false;
                 printf("[MAIN] Przerwa 5s minela. Sprawdzam czas.\n");
                 double nowSec = difftime(time(nullptr), startTime);
                 double nowMin = nowSec/60.0;
                 if(nowMin < X && !stopMain) {
+                    printf("[MAIN] Czyszczę zasoby przed uruchomieniem nowego kasjera...\n");
                     removeSharedMemoryAndSemaphore();
                     createSharedMemoryAndSemaphore();
+                    int status;
+                    pid_t pid;
+                    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+                        if (pid != kasjerPid) {
+                            printf("[MAIN] Usunieto proces zombie PID=%d\n", pid);
+                        }
+                    }
                     kasjerPid = startKasjer();
                     if(kasjerPid > 0) {
                         printf("[MAIN] Zrestartowano kasjera PID=%d\n", kasjerPid);
                     }
-                    fireAlreadyCalled = false;
-                    kasjerIsDying = false;
                 }
             }
             sleep(1);
@@ -267,15 +293,15 @@ int main(int argc, char** argv)
         }
 
         //nie ma kasjera i nie trwa czyszczenie uruchom nowego
-        if(kasjerPid < 0 && !cleaning) {
+        if(kasjerPid < 0 && !cleaning && !kasjerIsDying) {
             kasjerPid = startKasjer();
             if(kasjerPid > 0) {
                 printf("[MAIN] Uruchomiono nowego kasjera PID=%d\n", kasjerPid);
             }
             continue;
         }
-        usleep(100000);
-        //sleep(1);
+        //usleep(100000);
+        sleep(1);
     }
     stopSpawning = true;
     //sleep(2);//dajemy czas
